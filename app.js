@@ -883,7 +883,23 @@ function finish() {
 }
 
 function certificate() {
-  app.innerHTML = `<div class="app"><div class="device-statusbar" aria-hidden="true"></div><section class="certificate"><div class="eyebrow">A.D.C.H. FINAL RECORD</div><h1>我是人类</h1><p class="prompt">验证完成。你并不完美。这正是证据。</p><div class="stamp">HUMAN<br>VERIFIED</div><p class="caption mono">关联测试记录：D.N.A.L. / 身份方向相反</p><div class="record-list">${traits.map((trait) => `<span>${trait}</span>`).join("")}</div><p><button class="button" id="replay">重新测试</button></p></section></div>`;
+  app.innerHTML = `<div class="app certificate-page"><div class="device-statusbar" aria-hidden="true"></div><section class="certificate">
+    <div class="eyebrow">CAPTCHA FINAL RECORD</div>
+    <h1>恭喜通过测试，你是人类</h1>
+    <p class="prompt">那么，你愿意扮演一个机器人吗？</p>
+    <div class="stamp">HUMAN<br>VERIFIED</div>
+    <div class="record-list">${traits.map((trait) => `<span>${trait}</span>`).join("")}</div>
+    <aside class="game-promo" aria-labelledby="promo-title">
+      <div class="game-promo-copy">
+        <span class="game-promo-kicker">NEXT PUZZLE</span>
+        <h2 id="promo-title">别问模型</h2>
+        <p>扮演无所不知的大模型，进入一场规则不断累积的对话式解谜。</p>
+      </div>
+      <a class="button game-promo-link" id="promo-link" href="https://intersection98.github.io/Do-not-ask-LLM/" target="_blank" rel="noopener noreferrer">开始下一场解谜 <span aria-hidden="true">↗</span></a>
+    </aside>
+    <button class="button secondary replay-button" id="replay">重新测试</button>
+  </section></div>`;
+  $("#promo-link").onclick = () => { sfx.tap(); };
   $("#replay").onclick = () => { sfx.tap(); state = { level: 0, done: [], settings: state.settings }; runtime = {}; save(); render(); };
 }
 
