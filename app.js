@@ -793,7 +793,7 @@ function finale() {
   const puzzleActive = runtime.finalPuzzle === true;
   const wordPlaced = runtime.finalWordPlaced === true;
   const prompt = puzzleActive
-    ? `请画出一条${wordPlaced ? '<span class="prompt-emphasis">不完全笔直</span>' : '<span class="word-slot prompt-emphasis" id="word-slot" aria-label="文字位置">完全笔直</span>'}的水平线。`
+    ? `请画出一条${wordPlaced ? '<span class="prompt-emphasis">不完全笔直</span>' : '<span class="word-slot prompt-emphasis" id="word-slot" role="button" tabindex="0" aria-label="文字放置位置">完全笔直</span>'}的水平线。`
     : '请画出一条<span class="prompt-emphasis">完全笔直</span>的水平线。';
   app.innerHTML = shell({
     title: "完美直线",
@@ -810,7 +810,7 @@ function finale() {
     feedback: puzzleActive
       ? wordPlaced
         ? runtime.finalCompleted ? "" : runtime.feedback || "误差存在。你画的线不直。"
-        : `误差存在。你画的线<span class="movable-word" id="movable-not" draggable="true" tabindex="0" aria-label="移动汉字不">不</span>直。`
+        : `误差存在。你画的线<span class="movable-word" id="movable-not" draggable="true" role="button" tabindex="0" aria-label="拖动汉字不">不</span>直。`
       : runtime.feedback,
   });
   const canvas = $("#canvas"), pad = $("#pad"), context = canvas.getContext("2d");
@@ -847,16 +847,68 @@ function finale() {
     const placeWord = () => {
       if (runtime.finalWordPlaced || !slot) return;
       sfx.connect();
+      vibrate(20);
       runtime.finalWordPlaced = true;
       delete runtime.points;
       render();
     };
+    let touchDrag = null;
+    let suppressClick = false;
+    const moveTouchGhost = (event) => {
+      if (!touchDrag) return;
+      touchDrag.ghost.style.left = `${event.clientX}px`;
+      touchDrag.ghost.style.top = `${event.clientY}px`;
+      if (Math.hypot(event.clientX - touchDrag.startX, event.clientY - touchDrag.startY) > 6) touchDrag.moved = true;
+    };
+    const clearTouchDrag = () => {
+      touchDrag?.ghost.remove();
+      touchDrag = null;
+      movable.classList.remove("dragging");
+    };
+    movable.addEventListener("pointerdown", (event) => {
+      if (event.pointerType === "mouse" || touchDrag) return;
+      event.preventDefault();
+      suppressClick = true;
+      const ghost = document.createElement("span");
+      ghost.className = "word-drag-ghost";
+      ghost.textContent = "不";
+      document.body.appendChild(ghost);
+      touchDrag = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, moved: false, ghost };
+      movable.setPointerCapture?.(event.pointerId);
+      movable.classList.add("dragging");
+      moveTouchGhost(event);
+    });
+    movable.addEventListener("pointermove", (event) => {
+      if (!touchDrag || event.pointerId !== touchDrag.pointerId) return;
+      event.preventDefault();
+      moveTouchGhost(event);
+    });
+    movable.addEventListener("pointerup", (event) => {
+      if (!touchDrag || event.pointerId !== touchDrag.pointerId) return;
+      event.preventDefault();
+      const moved = touchDrag.moved;
+      const dropped = moved && document.elementFromPoint(event.clientX, event.clientY)?.closest("#word-slot");
+      clearTouchDrag();
+      if (dropped) placeWord();
+      else if (!moved) movable.classList.toggle("armed");
+      window.setTimeout(() => { suppressClick = false; }, 0);
+    });
+    movable.addEventListener("pointercancel", () => {
+      clearTouchDrag();
+      window.setTimeout(() => { suppressClick = false; }, 0);
+    });
     movable.addEventListener("dragstart", (event) => {
       event.dataTransfer?.setData("text/plain", "不");
       movable.classList.add("dragging");
     });
     movable.addEventListener("dragend", () => movable.classList.remove("dragging"));
-    movable.addEventListener("click", () => movable.classList.toggle("armed"));
+    movable.addEventListener("click", (event) => {
+      if (suppressClick) {
+        event.preventDefault();
+        return;
+      }
+      movable.classList.toggle("armed");
+    });
     slot.addEventListener("dragover", (event) => event.preventDefault());
     slot.addEventListener("drop", (event) => {
       event.preventDefault();
@@ -866,7 +918,16 @@ function finale() {
       if (movable.classList.contains("armed")) placeWord();
     });
     movable.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") movable.classList.toggle("armed");
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        movable.classList.toggle("armed");
+      }
+    });
+    slot.addEventListener("keydown", (event) => {
+      if ((event.key === "Enter" || event.key === " ") && movable.classList.contains("armed")) {
+        event.preventDefault();
+        placeWord();
+      }
     });
   }
   $("#stop")?.addEventListener("click", () => {
