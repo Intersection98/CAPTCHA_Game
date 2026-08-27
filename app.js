@@ -103,7 +103,7 @@ function shell({ title, prompt, rule = "", body, controls = "", feedback = "", h
 
 function common() {
   $("#debug-levels")?.addEventListener("click", () => {
-    const names = ["序章：我不是机器人", "01：轨迹校准", "02：找到所有红绿灯", "03：点亮所有格子", "04：数字校验", "05：异常围栏", "06：节点互证", "07：完美直线"];
+    const names = ["序章：我不是机器人", "01：滑动解锁", "02：找到所有红绿灯", "03：点亮所有格子", "04：数字校验", "05：围栏验证", "06：节点互证", "07：完美直线"];
     app.insertAdjacentHTML("beforeend", `<div class="modal" id="modal"><section class="card">
       <div class="eyebrow">DEBUG LEVEL SELECT</div><h2 class="title">选择测试关卡</h2>
       <div class="debug-levels">${names.map((name, index) => `<button class="button ${index === state.level ? "" : "secondary"}" data-debug-level="${index}">${name}</button>`).join("")}</div>
@@ -236,11 +236,11 @@ function intro() {
 }
 
 function slider() {
-  const prior = runtime.slider ?? 20;
+  const prior = runtime.slider ?? 0;
   const targetPosition = runtime.targetPosition ?? 66;
   app.innerHTML = shell({
-    title: "轨迹校准",
-    prompt: "拖动滑块，使缺口完全重合。",
+    title: "滑动解锁",
+    prompt: "拖动滑条至目标区域。",
     rule: "系统正在比较你的运动轨迹。",
     body: `<div class="slider-box"><div class="slider-track"><button id="target" class="target" style="left:${targetPosition}%" aria-label="目标区域"></button><input id="slider" type="range" min="0" max="100" value="${prior}" aria-label="拖动拼图块"></div></div>`,
     feedback: runtime.feedback,
@@ -390,7 +390,7 @@ function masyu() {
   const signal = (color) => `<span class="traffic-signal ${color}"><i></i><i></i><i></i></span>`;
   app.innerHTML = shell({
     title: "找到所有红绿灯",
-    prompt: "请选择所有包含红绿灯的图像。",
+    prompt: "找到所有包含红绿灯的图像。",
     rule: "被选择的图像会立即刷新。相同信号之间的图块构成连续路径，路径不能交叉。",
     body: `<div class="link-grid traffic-grid" id="traffic">${selected.map((color, index) => `<button class="link-cell" data-traffic="${index}" data-color="${initial[index] || connected[index]}" aria-label="验证码图像 ${index + 1}">${color ? signal(color) : ""}</button>`).join("")}</div>`,
     controls: `<div class="controls"><button id="restore-traffic" class="button secondary traffic-reset">还原初始状态</button></div>`,
@@ -623,8 +623,8 @@ function slither() {
     return `<div class="letter-fence-wrap ${solved(board, active) ? "solved" : ""}"><svg class="letter-fence" viewBox="-8 -8 316 316" role="group" aria-label="异常图像围栏 ${boardIndex + 1}">${baseGrid}${drawEdges(false)}${drawEdges(true)}${clues}</svg></div>`;
   };
   app.innerHTML = shell({
-    title: "异常围栏",
-    prompt: "请圈定全部异常区域，并找到缺失的字母",
+    title: "围栏验证",
+    prompt: "用围栏把数字圈出来，并找到缺失的字母",
     body: `<div class="fence-rail">${letterFenceBoards.map(boardMarkup).join("")}</div>`,
     controls: `<div class="controls letter-check"><button id="clear" class="button secondary">清除</button><input id="letter-answer" class="letter-answer" type="text" inputmode="text" maxlength="1" autocapitalize="characters" autocomplete="off" aria-label="输入验证字母" value="${letterAnswer}"><button id="submit-letter" class="button">验证</button></div>`,
     feedback: runtime.feedback,
@@ -700,7 +700,7 @@ function hashi() {
   });
   app.innerHTML = shell({
     title: "节点互证",
-    prompt: "恢复被隔离的节点网络，并输入两位数字。",
+    prompt: "让节点网络的所有数字归零，找到两位数字验证码。",
     body: `<div class="hashi">${bridgeDefs.map((edge, index) => {
       if (!bridges[index]) return "";
       const start = nodeDefs[edge.a].p, end = nodeDefs[edge.b].p;
