@@ -5,10 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "build": "vite build",
+    "build": "vite build && node scripts/obfuscate.mjs",
     "preview": "vite preview --host 127.0.0.1"
   },
   "devDependencies": {
+    "javascript-obfuscator": "^5.6.0",
     "vite": "^8.2.2"
   }
 }

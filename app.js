@@ -1,9 +1,6 @@
 const $ = (selector, root = document) => root.querySelector(selector);
 const app = $("#app");
 const STORAGE_KEY = "adch-progress-v1";
-const query = new URLSearchParams(location.search);
-const debugMode = query.get("debug") === "1";
-const requestedLevel = Math.max(0, Math.min(7, Number(query.get("level")) || 0));
 const traits = [
   "持续注意",
   "另辟蹊径",
@@ -15,13 +12,59 @@ const traits = [
   "拒绝无效目标",
 ];
 
-let state = debugMode
-  ? { level: requestedLevel, done: Array.from({ length: requestedLevel }, (_, index) => index), settings: {} }
-  : JSON.parse(localStorage.getItem(STORAGE_KEY) || '{"level":0,"done":[],"settings":{}}');
+let state = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{"level":0,"done":[],"settings":{}}');
 let runtime = {};
+const activePointers = new Map();
+const behaviorProfiles = [
+  { elapsed: 700, actions: 1, press: 650 },
+  { elapsed: 800, actions: 2, drags: 1 },
+  { elapsed: 1100, actions: 5, travel: 60 },
+  { elapsed: 1000, actions: 4, travel: 45 },
+  { elapsed: 1100, actions: 6, travel: 60 },
+  { elapsed: 1400, actions: 8, travel: 80, inputs: 1 },
+  { elapsed: 1400, actions: 8, travel: 80, inputs: 1 },
+  { elapsed: 1200, actions: 4, drags: 1 },
+];
+
+function freshBehavior(level = state.level) {
+  return {
+    level,
+    startedAt: performance.now(),
+    actions: 0,
+    drags: 0,
+    inputs: 0,
+    travel: 0,
+    longestPress: 0,
+    lastPoint: null,
+  };
+}
+
+let humanBehavior = freshBehavior();
+
+function resetHumanBehavior(level = state.level) {
+  activePointers.clear();
+  humanBehavior = freshBehavior(level);
+}
+
+function currentHumanBehavior() {
+  if (humanBehavior.level !== state.level) resetHumanBehavior();
+  return humanBehavior;
+}
+
+function hasHumanBehavior() {
+  const evidence = currentHumanBehavior();
+  const profile = behaviorProfiles[state.level];
+  if (!profile) return false;
+  return performance.now() - evidence.startedAt >= profile.elapsed
+    && evidence.actions >= profile.actions
+    && evidence.drags >= (profile.drags || 0)
+    && evidence.inputs >= (profile.inputs || 0)
+    && evidence.travel >= (profile.travel || 0)
+    && evidence.longestPress >= (profile.press || 0);
+}
 
 function save() {
-  if (!debugMode) localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
 function vibrate(pattern = 20) {
@@ -78,14 +121,14 @@ const sfx = {
   draw:   () => tone(440, 0.02, "sine", 0.02),
 };
 
-function shell({ title, prompt, rule = "", body, controls = "", feedback = "", home = false }) {
+function shell({ title, prompt, body, controls = "", feedback = "", home = false }) {
   const dots = Array.from({ length: 8 }, (_, index) => `<i class="${state.done.includes(index) ? "done" : index === state.level ? "current" : ""}"></i>`).join("");
   return `
     <div class="app ${home ? "intro-page" : ""}">
       <div class="device-statusbar" aria-hidden="true"></div>
       <header class="topbar">
-        <div><div class="eyebrow">CAPTCHA//PUZZLE GAME ${debugMode ? "调试验证模式" : "自动验证测试"}</div><div class="confidence">人类置信度 ${Math.min(98, 16 + state.done.length * 11)}%</div></div>
-        <div class="top-actions">${debugMode ? `<button class="button secondary" id="debug-levels">选关</button>` : ""}<button class="button secondary" id="settings" aria-label="设置">设置</button></div>
+        <div><div class="eyebrow">CAPTCHA//PUZZLE GAME 自动验证测试</div><div class="confidence">人类置信度 ${Math.min(98, 16 + state.done.length * 11)}%</div></div>
+        <div class="top-actions"><button class="button secondary" id="settings" aria-label="设置">设置</button></div>
       </header>
       <div class="progress" aria-label="测试进度">${dots}</div>
       ${home ? "" : `<section class="card">
@@ -102,19 +145,6 @@ function shell({ title, prompt, rule = "", body, controls = "", feedback = "", h
 }
 
 function common() {
-  $("#debug-levels")?.addEventListener("click", () => {
-    const names = ["序章：我不是机器人", "01：滑动解锁", "02：找到所有红绿灯", "03：点亮所有格子", "04：数字校验", "05：围栏验证", "06：节点互证", "07：完美直线"];
-    app.insertAdjacentHTML("beforeend", `<div class="modal" id="modal"><section class="card">
-      <div class="eyebrow">DEBUG LEVEL SELECT</div><h2 class="title">选择测试关卡</h2>
-      <div class="debug-levels">${names.map((name, index) => `<button class="button ${index === state.level ? "" : "secondary"}" data-debug-level="${index}">${name}</button>`).join("")}</div>
-      <p><button class="button secondary" id="close">关闭</button></p>
-    </section></div>`);
-    $("#close").onclick = () => $("#modal").remove();
-    document.querySelectorAll("[data-debug-level]").forEach((button) => button.onclick = () => {
-      const level = Number(button.dataset.debugLevel);
-      location.search = `?debug=1&level=${level}`;
-    });
-  });
   $("#settings")?.addEventListener("click", () => {
     app.insertAdjacentHTML("beforeend", `
       <div class="modal" id="modal"><section class="card">
@@ -128,13 +158,15 @@ function common() {
     $("#close").onclick = () => { sfx.tap(); $("#modal").remove(); };
     $("#sound").onclick = () => { state.settings.sound = state.settings.sound === false; sfx.tap(); save(); $("#modal").remove(); render(); };
     $("#vibration").onclick = () => { state.settings.vibration = state.settings.vibration === false; sfx.tap(); save(); $("#modal").remove(); render(); };
-    $("#reset").onclick = () => { sfx.tap(); state = { level: 0, done: [], settings: state.settings }; save(); $("#modal").remove(); render(); };
+    $("#reset").onclick = () => { sfx.tap(); state = { level: 0, done: [], settings: state.settings }; runtime = {}; resetHumanBehavior(); save(); $("#modal").remove(); render(); };
   });
 }
 
 function complete() {
+  if (!hasHumanBehavior()) return fail("验证未通过。");
   if (!state.done.includes(state.level)) state.done.push(state.level);
   state.level += 1;
+  resetHumanBehavior();
   save();
   vibrate([30, 30, 90]);
   sfx.complete();
@@ -143,7 +175,7 @@ function complete() {
       <h2 class="title">通过验证</h2>
       <button class="button" id="next">继续验证</button>
     </section></div>`);
-  $("#next").onclick = () => { sfx.tap(); $("#modal").remove(); runtime = {}; render(); };
+  $("#next").onclick = () => { sfx.tap(); $("#modal").remove(); runtime = {}; resetHumanBehavior(); render(); };
 }
 
 function fail(text) {
@@ -187,7 +219,6 @@ function intro() {
   app.innerHTML = shell({
     title: "我不是机器人",
     prompt: "请勾选下方方框开始游戏。",
-    rule: "系统需要确认：你能主动维持一个意图，而不仅是发出一次脉冲。",
     home: true,
     body: `<div class="landing">
       <header class="card landing-hero">
@@ -228,7 +259,7 @@ function intro() {
     holding = false; cancelAnimationFrame(frame); box.classList.remove("holding");
     if (name === "pointerup" && runtime.holdProgress >= 59 && runtime.holdProgress <= 69) {
       box.textContent = "✓";
-      complete("持续意图", "你在恰当的时刻维持并结束了自己的选择。");
+      complete();
       return;
     }
     fail("验证未通过。");
@@ -241,7 +272,6 @@ function slider() {
   app.innerHTML = shell({
     title: "滑动解锁",
     prompt: "拖动滑条至目标区域。",
-    rule: "系统正在比较你的运动轨迹。",
     body: `<div class="slider-box"><div class="slider-track"><button id="target" class="target" style="left:${targetPosition}%" aria-label="目标区域"></button><input id="slider" type="range" min="0" max="100" value="${prior}" aria-label="拖动拼图块"></div></div>`,
     feedback: runtime.feedback,
   });
@@ -257,7 +287,7 @@ function slider() {
     runtime.targetPosition = positions[runtime.targetIndex];
     $("#target").style.left = `${runtime.targetPosition}%`;
   };
-  $("#target").onclick = () => { sfx.connect(); complete("身体误差", "你没有盲从失效的滑动指令，而是直接对目标作出了判断。"); };
+  $("#target").onclick = () => { sfx.connect(); complete(); };
 }
 
 const lightUpBoards = [
@@ -329,7 +359,6 @@ function lightUp() {
   app.innerHTML = shell({
     title: "点亮所有格子",
     prompt: "将所有格子点亮为黄色",
-    rule: "白色图像必须全部清晰。黑色遮挡图块会阻断扫描；数字是其相邻已选图像的数量。",
     body: `<div class="lightup-grid" id="lightup" style="--grid-size:${size}">${Array.from({ length: size * size }, (_, index) => {
       if (isBlack(index)) return `<div class="lightup-cell blackout ${Object.hasOwn(clues, index) ? clueOverages.has(index) ? "clue-over" : clueMatches.has(index) ? "clue-met" : "" : "no-clue"}" aria-label="遮挡图块${clues[index] ? `，识别数字 ${clues[index]}` : ""}">${clues[index] || ""}</div>`;
       return `<button class="lightup-cell ${illuminated.has(index) ? "lit" : ""} ${lights.has(index) ? "has-light" : ""} ${collidingLights.has(index) ? "conflict" : ""}" data-light-cell="${index}" aria-label="图像区域 ${index + 1}">${lights.has(index) ? `<i class="scan-light"></i>` : ""}</button>`;
@@ -354,7 +383,7 @@ function lightUp() {
       window.setTimeout(() => {
         const current = new Set(runtime.lightUp || []);
         if (state.level === 3 && isSolved(current)) {
-          complete("视觉注意力", "你让所有图像区域获得可见度，同时没有让校正信号彼此冲突。");
+          complete();
         }
       }, 260);
       return;
@@ -391,7 +420,6 @@ function masyu() {
   app.innerHTML = shell({
     title: "找到所有红绿灯",
     prompt: "找到所有包含红绿灯的图像。",
-    rule: "被选择的图像会立即刷新。相同信号之间的图块构成连续路径，路径不能交叉。",
     body: `<div class="link-grid traffic-grid" id="traffic">${selected.map((color, index) => `<button class="link-cell" data-traffic="${index}" data-color="${initial[index] || connected[index]}" aria-label="验证码图像 ${index + 1}">${color ? signal(color) : ""}</button>`).join("")}</div>`,
     controls: `<div class="controls"><button id="restore-traffic" class="button secondary traffic-reset">还原初始状态</button></div>`,
     feedback: runtime.feedback,
@@ -406,7 +434,7 @@ function masyu() {
       render();
       window.setTimeout(() => {
         if (state.level === 2 && runtime.traffic?.every((color, cell) => color === target[cell])) {
-          complete("对象恒常性", "你在反复刷新的图像中重建了连续的信号路径。");
+          complete();
         }
       }, 260);
       return;
@@ -491,7 +519,7 @@ function sudoku() {
       window.setTimeout(() => {
         const current = runtime.sudokuLinks || [];
         if (state.level === 4 && isSolved(current)) {
-          complete("表征转换", "你在同一张数字验证盘中重建了完整的连续路径。");
+          complete();
         }
       }, 260);
       return;
@@ -650,7 +678,7 @@ function slither() {
     const allSolved = letterFenceBoards.every((board, index) => solved(board, new Set(fences[index])));
     if (!allSolved) return fail("图像尚未还原。");
     if ((runtime.letterAnswer || "").toUpperCase() !== "A") return fail("验证未通过。");
-    complete("边界判断", "你补全了被系统遗漏的字符。");
+    complete();
   };
 }
 
@@ -783,7 +811,7 @@ function hashi() {
   };
   $("#submit").onclick = () => {
     if (!sums.every((sum, index) => sum === nodeDefs[index].v)) return fail("节点网络尚未恢复。");
-    if (runtime.hashiAnswer === "38") complete("整体意识", "你从节点之间提取出正确的整体信号。");
+    if (runtime.hashiAnswer === "38") complete();
     else fail("数字验证未通过。");
   };
 }
@@ -798,7 +826,6 @@ function finale() {
   app.innerHTML = shell({
     title: "完美直线",
     prompt,
-    rule: `当前精度阈值：${attempts ? (0.03 / (attempts + 1)).toFixed(3) : "0.030"} px。系统会持续提高标准。`,
     body: `<div class="draw-pad" id="pad"><div class="baseline"></div><canvas id="canvas"></canvas></div>`,
     controls: wordPlaced
       ? `<div class="controls"><button id="submit" class="button">提交直线</button></div>`
@@ -832,7 +859,7 @@ function finale() {
       runtime.finalCompleted = true;
       runtime.feedback = "";
       $(".feedback").textContent = "";
-      complete("拒绝无效目标", "你发现了题目中的语义错位：不必画出完全笔直的线。");
+      complete();
       return;
     }
     if (puzzleActive) return;
@@ -937,8 +964,12 @@ function finale() {
 }
 
 function finish() {
+  if (!hasHumanBehavior()) return fail("验证未通过。");
   if (!state.done.includes(7)) state.done.push(7);
-  state.level = 8; save(); vibrate([40,40,40,100]);
+  state.level = 8;
+  resetHumanBehavior();
+  save();
+  vibrate([40,40,40,100]);
   sfx.complete();
   render();
 }
@@ -961,7 +992,7 @@ function certificate() {
     <button class="button secondary replay-button" id="replay">重新测试</button>
   </section></div>`;
   $("#promo-link").onclick = () => { sfx.tap(); };
-  $("#replay").onclick = () => { sfx.tap(); state = { level: 0, done: [], settings: state.settings }; runtime = {}; save(); render(); };
+  $("#replay").onclick = () => { sfx.tap(); state = { level: 0, done: [], settings: state.settings }; runtime = {}; resetHumanBehavior(); save(); render(); };
 }
 
 const oldRender = render;
@@ -979,5 +1010,57 @@ document.addEventListener("pointerdown", (e) => {
   if (el.dataset.tool || el.dataset.traffic || el.dataset.lightCell || el.dataset.hashiNode || el.dataset.bridge || el.dataset.letterEdge) return;
   sfx.tap();
 }, { passive: true });
+
+document.addEventListener("pointerdown", (event) => {
+  if (!event.isTrusted || !event.isPrimary) return;
+  const evidence = currentHumanBehavior();
+  evidence.actions += 1;
+  const point = { x: event.clientX, y: event.clientY };
+  if (evidence.lastPoint) evidence.travel += Math.hypot(point.x - evidence.lastPoint.x, point.y - evidence.lastPoint.y);
+  evidence.lastPoint = point;
+  activePointers.set(event.pointerId, {
+    startedAt: performance.now(),
+    lastX: event.clientX,
+    lastY: event.clientY,
+    distance: 0,
+    samples: 0,
+  });
+}, { capture: true, passive: true });
+
+document.addEventListener("pointermove", (event) => {
+  if (!event.isTrusted) return;
+  const pointer = activePointers.get(event.pointerId);
+  if (!pointer) return;
+  pointer.distance += Math.hypot(event.clientX - pointer.lastX, event.clientY - pointer.lastY);
+  pointer.lastX = event.clientX;
+  pointer.lastY = event.clientY;
+  pointer.samples += 1;
+}, { capture: true, passive: true });
+
+document.addEventListener("pointerup", (event) => {
+  if (!event.isTrusted) return;
+  const pointer = activePointers.get(event.pointerId);
+  if (!pointer) return;
+  const evidence = currentHumanBehavior();
+  const duration = performance.now() - pointer.startedAt;
+  evidence.longestPress = Math.max(evidence.longestPress, duration);
+  if (pointer.samples >= 2 && pointer.distance >= 8) evidence.drags += 1;
+  activePointers.delete(event.pointerId);
+}, { capture: true, passive: true });
+
+document.addEventListener("pointercancel", (event) => {
+  activePointers.delete(event.pointerId);
+}, { capture: true, passive: true });
+
+document.addEventListener("keydown", (event) => {
+  if (!event.isTrusted || event.metaKey || event.ctrlKey || event.altKey) return;
+  const evidence = currentHumanBehavior();
+  evidence.actions += 1;
+}, { capture: true });
+
+document.addEventListener("input", (event) => {
+  if (!event.isTrusted) return;
+  currentHumanBehavior().inputs += 1;
+}, { capture: true });
 
 render();
