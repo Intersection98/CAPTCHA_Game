@@ -5,8 +5,8 @@ const query = new URLSearchParams(location.search);
 const debugMode = query.get("debug") === "1";
 const requestedLevel = Math.max(0, Math.min(7, Number(query.get("level")) || 0));
 const traits = [
-  "持续意图",
-  "身体误差",
+  "持续注意",
+  "另辟蹊径",
   "对象恒常性",
   "视觉注意力",
   "质疑前提",
@@ -28,24 +28,75 @@ function vibrate(pattern = 20) {
   if (state.settings.vibration !== false && navigator.vibrate) navigator.vibrate(pattern);
 }
 
-function shell({ title, prompt, rule = "", body, controls = "", feedback = "" }) {
+let audioCtx = null;
+function getAudioCtx() {
+  if (!audioCtx) {
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch { return null; }
+  }
+  if (audioCtx.state === "suspended") audioCtx.resume();
+  return audioCtx;
+}
+function tone(freq, duration, type = "square", gain = 0.06, delay = 0) {
+  if (state.settings.sound === false) return;
+  const ctx = getAudioCtx();
+  if (!ctx) return;
+  const t = ctx.currentTime + delay;
+  const osc = ctx.createOscillator();
+  const g = ctx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, t);
+  g.gain.setValueAtTime(gain, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + duration);
+  osc.connect(g).connect(ctx.destination);
+  osc.start(t);
+  osc.stop(t + duration + 0.02);
+}
+function slide(freqStart, freqEnd, duration, type = "square", gain = 0.06, delay = 0) {
+  if (state.settings.sound === false) return;
+  const ctx = getAudioCtx();
+  if (!ctx) return;
+  const t = ctx.currentTime + delay;
+  const osc = ctx.createOscillator();
+  const g = ctx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freqStart, t);
+  osc.frequency.exponentialRampToValueAtTime(Math.max(freqEnd, 20), t + duration);
+  g.gain.setValueAtTime(gain, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + duration);
+  osc.connect(g).connect(ctx.destination);
+  osc.start(t);
+  osc.stop(t + duration + 0.02);
+}
+const sfx = {
+  tap:    () => tone(520, 0.05, "square", 0.04),
+  place:  () => tone(660, 0.04, "square", 0.05),
+  remove: () => tone(330, 0.04, "square", 0.04),
+  connect:() => { tone(523, 0.06, "triangle", 0.05); tone(784, 0.08, "triangle", 0.05, 0.05); },
+  success:() => { tone(587, 0.10, "triangle", 0.07); tone(880, 0.15, "triangle", 0.07, 0.08); },
+  fail:   () => slide(220, 110, 0.20, "sawtooth", 0.05),
+  complete: () => { tone(523, 0.10, "triangle", 0.07); tone(659, 0.10, "triangle", 0.07, 0.10); tone(784, 0.20, "triangle", 0.08, 0.20); },
+  draw:   () => tone(440, 0.02, "sine", 0.02),
+};
+
+function shell({ title, prompt, rule = "", body, controls = "", feedback = "", home = false }) {
   const dots = Array.from({ length: 8 }, (_, index) => `<i class="${state.done.includes(index) ? "done" : index === state.level ? "current" : ""}"></i>`).join("");
   return `
-    <div class="app">
+    <div class="app ${home ? "intro-page" : ""}">
+      <div class="device-statusbar" aria-hidden="true"></div>
       <header class="topbar">
-        <div><div class="eyebrow">A.D.C.H. // ${debugMode ? "调试验证模式" : "自动验证测试"}</div><div class="confidence">人类置信度 ${Math.min(98, 16 + state.done.length * 11)}%</div></div>
+        <div><div class="eyebrow">CAPTCHA//PUZZLE GAME ${debugMode ? "调试验证模式" : "自动验证测试"}</div><div class="confidence">人类置信度 ${Math.min(98, 16 + state.done.length * 11)}%</div></div>
         <div class="top-actions">${debugMode ? `<button class="button secondary" id="debug-levels">选关</button>` : ""}<button class="button secondary" id="settings" aria-label="设置">设置</button></div>
       </header>
       <div class="progress" aria-label="测试进度">${dots}</div>
-      <section class="card">
+      ${home ? "" : `<section class="card">
         <div class="eyebrow">TEST ${String(state.level).padStart(2, "0")} / 07</div>
         <h1 class="title">${title}</h1>
         <p class="prompt">${prompt}</p>
-      </section>
+      </section>`}
       <section class="board-wrap">${body}</section>
       <p class="feedback ${runtime.ok ? "ok" : ""}">${feedback}</p>
       ${controls}
-      ${state.done.length ? `<section class="record"><h2>已确认的人类特征</h2><div class="record-list">${state.done.map((n) => `<span>${traits[n]}</span>`).join("")}</div></section>` : ""}
+      <section class="record ${state.done.length ? "" : "record-empty"}" ${state.done.length ? "" : 'aria-hidden="true"'}><h2>已确认的人类特征</h2><div class="record-list">${state.done.map((n) => `<span>${traits[n]}</span>`).join("")}</div></section>
     </div>
   `;
 }
@@ -69,37 +120,58 @@ function common() {
       <div class="modal" id="modal"><section class="card">
         <div class="eyebrow">LOCAL SETTINGS</div><h2 class="title">测试设置</h2>
         <p class="caption">所有解题数据仅保存在此设备。</p>
+        <p><button class="button secondary" id="sound">音效：${state.settings.sound === false ? "关" : "开"}</button></p>
         <p><button class="button secondary" id="vibration">振动：${state.settings.vibration === false ? "关" : "开"}</button></p>
         <p><button class="button secondary" id="reset">清除全部进度</button></p>
         <button class="button" id="close">返回测试</button>
       </section></div>`);
-    $("#close").onclick = () => $("#modal").remove();
-    $("#vibration").onclick = () => { state.settings.vibration = state.settings.vibration === false; save(); $("#modal").remove(); render(); };
-    $("#reset").onclick = () => { state = { level: 0, done: [], settings: state.settings }; save(); $("#modal").remove(); render(); };
+    $("#close").onclick = () => { sfx.tap(); $("#modal").remove(); };
+    $("#sound").onclick = () => { state.settings.sound = state.settings.sound === false; sfx.tap(); save(); $("#modal").remove(); render(); };
+    $("#vibration").onclick = () => { state.settings.vibration = state.settings.vibration === false; sfx.tap(); save(); $("#modal").remove(); render(); };
+    $("#reset").onclick = () => { sfx.tap(); state = { level: 0, done: [], settings: state.settings }; save(); $("#modal").remove(); render(); };
   });
 }
 
-function complete(trait, evidence) {
+function complete() {
   if (!state.done.includes(state.level)) state.done.push(state.level);
   state.level += 1;
   save();
   vibrate([30, 30, 90]);
+  sfx.complete();
   app.insertAdjacentHTML("beforeend", `
-    <div class="modal" id="modal"><section class="card">
-      <div class="eyebrow">HUMAN SIGNAL RECORDED</div>
-      <h2 class="title">${trait}</h2>
-      <p class="prompt">${evidence}</p>
-      <p class="rule">系统记录：<span class="mono">${trait.toUpperCase().replaceAll(" ", "_")}_CONFIRMED</span></p>
+    <div class="modal" id="modal"><section class="card success-modal">
+      <h2 class="title">通过验证</h2>
       <button class="button" id="next">继续验证</button>
     </section></div>`);
-  $("#next").onclick = () => { $("#modal").remove(); runtime = {}; render(); };
+  $("#next").onclick = () => { sfx.tap(); $("#modal").remove(); runtime = {}; render(); };
 }
 
 function fail(text) {
   runtime.ok = false;
   runtime.feedback = text;
   vibrate([35, 45, 35]);
+  sfx.fail();
   render();
+}
+
+function fitBoardToViewport() {
+  const wrap = $(".board-wrap");
+  const board = wrap?.firstElementChild;
+  if (!wrap || !board) return;
+  board.style.transform = "none";
+  board.style.boxShadow = "";
+  board.style.flexShrink = "0";
+  const rect = board.getBoundingClientRect();
+  const contentHeight = Math.max(rect.height, board.scrollHeight);
+  const scale = Math.min(1, (wrap.clientWidth - 10) / rect.width, (wrap.clientHeight - 38) / contentHeight);
+  if (scale < 1) {
+    board.style.transform = `scale(${scale})`;
+    board.style.transformOrigin = "center center";
+    if (getComputedStyle(board).boxShadow !== "none") {
+      const shadowOffset = 5 / scale;
+      board.style.boxShadow = `${shadowOffset}px ${shadowOffset}px 0 #121212`;
+    }
+  }
 }
 
 function render() {
@@ -107,15 +179,29 @@ function render() {
   const levels = [intro, slider, masyu, lightUp, sudoku, slither, hashi, finale];
   levels[Math.min(state.level, 7)]();
   common();
+  requestAnimationFrame(fitBoardToViewport);
 }
 
 function intro() {
   let holding = false, started = 0, frame;
   app.innerHTML = shell({
     title: "我不是机器人",
-    prompt: "请勾选下方方框以继续。",
+    prompt: "请勾选下方方框开始游戏。",
     rule: "系统需要确认：你能主动维持一个意图，而不仅是发出一次脉冲。",
-    body: `<div class="check-zone" id="check"><div class="checkbox" id="box"></div><div><b>我不是机器人</b><div class="hold-meter"><i id="meter"></i><span class="hold-target"></span></div></div></div>`,
+    home: true,
+    body: `<div class="landing">
+      <header class="card landing-hero">
+        <div class="landing-kicker"><span>PUZZLE GAME</span><span>8 LEVELS</span></div>
+        <h1 class="landing-title">
+          <span class="landing-title-lead"><span class="robot-icon" aria-hidden="true">🤖</span>全自动区分</span>
+          <span class="landing-title-pair"><strong class="machine-label">计算机</strong><span>与</span><strong class="human-label">人类</strong></span>
+          <span>的图灵测试</span>
+        </h1>
+        <p class="landing-sub"><span>只有人类能过关的解谜游戏</span></p>
+      </header>
+      <div class="start-caption"><span>TEST 00</span><b>勾选下方方框开始游戏</b></div>
+      <div class="check-zone" id="check"><div class="checkbox" id="box"></div><div class="check-copy"><b>我不是机器人</b><div class="hold-meter"><i id="meter"></i><span class="hold-target"></span></div></div></div>
+    </div>`,
     feedback: runtime.feedback,
   });
   const check = $("#check"), meter = $("#meter"), box = $("#box");
@@ -133,6 +219,7 @@ function intro() {
   }
   check.onpointerdown = (event) => {
     event.preventDefault();
+    sfx.tap();
     holding = true; started = performance.now(); box.classList.add("holding");
     check.setPointerCapture?.(event.pointerId); frame = requestAnimationFrame(tick);
   };
@@ -170,7 +257,7 @@ function slider() {
     runtime.targetPosition = positions[runtime.targetIndex];
     $("#target").style.left = `${runtime.targetPosition}%`;
   };
-  $("#target").onclick = () => complete("身体误差", "你没有盲从失效的滑动指令，而是直接对目标作出了判断。");
+  $("#target").onclick = () => { sfx.connect(); complete("身体误差", "你没有盲从失效的滑动指令，而是直接对目标作出了判断。"); };
 }
 
 const lightUpBoards = [
@@ -247,12 +334,14 @@ function lightUp() {
       if (isBlack(index)) return `<div class="lightup-cell blackout ${Object.hasOwn(clues, index) ? clueOverages.has(index) ? "clue-over" : clueMatches.has(index) ? "clue-met" : "" : "no-clue"}" aria-label="遮挡图块${clues[index] ? `，识别数字 ${clues[index]}` : ""}">${clues[index] || ""}</div>`;
       return `<button class="lightup-cell ${illuminated.has(index) ? "lit" : ""} ${lights.has(index) ? "has-light" : ""} ${collidingLights.has(index) ? "conflict" : ""}" data-light-cell="${index}" aria-label="图像区域 ${index + 1}">${lights.has(index) ? `<i class="scan-light"></i>` : ""}</button>`;
     }).join("")}</div>`,
-    controls: `<div class="controls wide-controls"><button id="clear-lightup" class="button secondary lightup-reset">还原图像</button></div>`,
+    controls: `<div class="controls wide-controls"><button id="clear-lightup" class="button secondary lightup-reset">还原初始状态</button></div>`,
     feedback: runtime.feedback,
   });
   document.querySelectorAll("[data-light-cell]").forEach((cell) => cell.onclick = () => {
     const index = Number(cell.dataset.lightCell);
-    lights.has(index) ? lights.delete(index) : lights.add(index);
+    const had = lights.has(index);
+    had ? lights.delete(index) : lights.add(index);
+    had ? sfx.remove() : sfx.place();
     runtime.lightUp = [...lights];
     if (isSolved(lights)) {
       if (boardIndex < lightUpBoards.length - 1) {
@@ -303,13 +392,15 @@ function masyu() {
     title: "找到所有红绿灯",
     prompt: "请选择所有包含红绿灯的图像。",
     rule: "被选择的图像会立即刷新。相同信号之间的图块构成连续路径，路径不能交叉。",
-    body: `<div><div class="link-grid traffic-grid" id="traffic">${selected.map((color, index) => `<button class="link-cell" data-traffic="${index}" data-color="${initial[index] || connected[index]}" aria-label="验证码图像 ${index + 1}">${color ? signal(color) : ""}</button>`).join("")}</div></div>`,
+    body: `<div class="link-grid traffic-grid" id="traffic">${selected.map((color, index) => `<button class="link-cell" data-traffic="${index}" data-color="${initial[index] || connected[index]}" aria-label="验证码图像 ${index + 1}">${color ? signal(color) : ""}</button>`).join("")}</div>`,
     controls: `<div class="controls"><button id="restore-traffic" class="button secondary traffic-reset">还原初始状态</button></div>`,
     feedback: runtime.feedback,
   });
   document.querySelectorAll("[data-traffic]").forEach((tile) => tile.onclick = () => {
     const index = Number(tile.dataset.traffic);
+    const prev = selected[index];
     selected[index] = ["", ...colors][(["", ...colors].indexOf(selected[index]) + 1) % 4];
+    prev === "" ? sfx.place() : selected[index] === "" ? sfx.remove() : sfx.tap();
     runtime.traffic = selected;
     if (selected.every((color, cell) => color === target[cell])) {
       render();
@@ -386,12 +477,14 @@ function sudoku() {
     feedback: runtime.feedback,
   });
   document.querySelectorAll("[data-tool]").forEach((button) => button.onclick = () => {
+    sfx.tap();
     runtime.sudokuTool = button.dataset.tool;
     render();
   });
   document.querySelectorAll("[data-link-cell]").forEach((cell) => cell.onclick = () => {
     const index = Number(cell.dataset.linkCell);
     links[index] = tool;
+    sfx.place();
     runtime.sudokuLinks = links;
     if (isSolved(links)) {
       render();
@@ -540,7 +633,9 @@ function slither() {
     const boardIndex = Number(edge.dataset.letterBoard);
     const id = edge.dataset.letterEdge;
     const active = new Set(fences[boardIndex]);
-    active.has(id) ? active.delete(id) : active.add(id);
+    const had = active.has(id);
+    had ? active.delete(id) : active.add(id);
+    had ? sfx.remove() : sfx.connect();
     fences[boardIndex] = [...active];
     runtime.fences = fences;
     render();
@@ -549,6 +644,7 @@ function slither() {
   $("#letter-answer").oninput = (event) => {
     event.target.value = event.target.value.slice(0, 1).toUpperCase();
     runtime.letterAnswer = event.target.value;
+    sfx.tap();
   };
   $("#submit-letter").onclick = () => {
     const allSolved = letterFenceBoards.every((board, index) => solved(board, new Set(fences[index])));
@@ -602,25 +698,9 @@ function hashi() {
     sums[edge.a] += bridges[index];
     sums[edge.b] += bridges[index];
   });
-  const connected = () => {
-    const visited = new Set([0]);
-    const queue = [0];
-    while (queue.length) {
-      const current = queue.shift();
-      bridgeDefs.forEach((edge, index) => {
-        if (!bridges[index]) return;
-        const next = edge.a === current ? edge.b : edge.b === current ? edge.a : -1;
-        if (next >= 0 && !visited.has(next)) {
-          visited.add(next);
-          queue.push(next);
-        }
-      });
-    }
-    return visited.size === nodeDefs.length;
-  };
   app.innerHTML = shell({
     title: "节点互证",
-    prompt: "恢复被隔离的节点网络。",
+    prompt: "恢复被隔离的节点网络，并输入两位数字。",
     body: `<div class="hashi">${bridgeDefs.map((edge, index) => {
       if (!bridges[index]) return "";
       const start = nodeDefs[edge.a].p, end = nodeDefs[edge.b].p;
@@ -632,17 +712,19 @@ function hashi() {
       const value = node.hidden ? (sums[index] ? -sums[index] : "") : node.v - sums[index];
       return `<button class="node ${node.hidden ? "blank" : ""} ${!node.hidden && sums[index] === node.v ? "zero" : ""} ${over ? "over" : ""} ${selectedNode === index ? "selected" : ""}" data-hashi-node="${index}" aria-label="选择节点" style="left:${node.p[0]}%;top:${node.p[1]}%">${value}</button>`;
     }).join("")}</div>`,
-    controls: `<div class="controls"><button id="clear" class="button secondary">清除</button><button id="submit" class="button">验证网络</button></div>`,
+    controls: `<div class="controls number-check-controls"><button id="clear" class="button secondary">清除</button><input id="hashi-answer" class="number-answer" type="text" inputmode="numeric" pattern="[0-9]{2}" maxlength="2" autocomplete="off" aria-label="输入两位数字" value="${runtime.hashiAnswer || ""}"><button id="submit" class="button">验证</button></div>`,
     feedback: runtime.feedback,
   });
   document.querySelectorAll("[data-hashi-node]").forEach((node) => node.onclick = () => {
     const nodeIndex = Number(node.dataset.hashiNode);
     if (selectedNode === undefined) {
+      sfx.tap();
       runtime.hashiSelection = nodeIndex;
       render();
       return;
     }
     if (selectedNode === nodeIndex) {
+      sfx.remove();
       delete runtime.hashiSelection;
       render();
       return;
@@ -675,6 +757,7 @@ function hashi() {
       return fail("道路被已有桥梁阻断。");
     }
     bridges[bridgeIndex] = (bridges[bridgeIndex] + 1) % 3;
+    bridges[bridgeIndex] === 0 ? sfx.remove() : sfx.connect();
     runtime.bridges = bridges;
     delete runtime.hashiSelection;
     render();
@@ -682,32 +765,53 @@ function hashi() {
   document.querySelectorAll("[data-bridge]").forEach((bridge) => bridge.onclick = () => {
     const index = Number(bridge.dataset.bridge);
     bridges[index] = (bridges[index] + 1) % 3;
+    bridges[index] === 0 ? sfx.remove() : sfx.connect();
     runtime.bridges = bridges;
     delete runtime.hashiSelection;
     render();
   });
+  $("#hashi-answer")?.addEventListener("input", (event) => {
+    event.target.value = event.target.value.replace(/\D/g, "").slice(0, 2);
+    runtime.hashiAnswer = event.target.value;
+    sfx.tap();
+  });
   $("#clear").onclick = () => {
     runtime.bridges = Array(bridgeDefs.length).fill(0);
     delete runtime.hashiSelection;
+    runtime.hashiAnswer = "";
     render();
   };
   $("#submit").onclick = () => {
-    if (sums.every((sum, index) => sum === nodeDefs[index].v)) complete("整体意识", "你让每个局部信号都满足要求，并把它们组成一条整体可信的证据链。");
-    else fail("验证未通过。");
+    if (!sums.every((sum, index) => sum === nodeDefs[index].v)) return fail("节点网络尚未恢复。");
+    if (runtime.hashiAnswer === "38") complete("整体意识", "你从节点之间提取出正确的整体信号。");
+    else fail("数字验证未通过。");
   };
 }
 
 function finale() {
   const attempts = runtime.finalAttempts || 0;
+  const puzzleActive = runtime.finalPuzzle === true;
+  const wordPlaced = runtime.finalWordPlaced === true;
+  const prompt = puzzleActive
+    ? `请画出一条${wordPlaced ? '<span class="prompt-emphasis">不完全笔直</span>' : '<span class="word-slot prompt-emphasis" id="word-slot" aria-label="文字位置">完全笔直</span>'}的水平线。`
+    : '请画出一条<span class="prompt-emphasis">完全笔直</span>的水平线。';
   app.innerHTML = shell({
     title: "完美直线",
-    prompt: "请画出一条完全笔直的水平线。",
+    prompt,
     rule: `当前精度阈值：${attempts ? (0.03 / (attempts + 1)).toFixed(3) : "0.030"} px。系统会持续提高标准。`,
     body: `<div class="draw-pad" id="pad"><div class="baseline"></div><canvas id="canvas"></canvas></div>`,
-    controls: attempts >= 3
+    controls: wordPlaced
+      ? `<div class="controls"><button id="submit" class="button">提交直线</button></div>`
+      : puzzleActive
+      ? `<div class="controls"><button id="submit" class="button">提交直线</button></div>`
+      : attempts >= 3
       ? `<div class="controls"><button id="stop" class="button danger">结束验证</button></div>`
       : `<div class="controls"><button id="submit" class="button">提交直线</button></div>`,
-    feedback: runtime.feedback,
+    feedback: puzzleActive
+      ? wordPlaced
+        ? runtime.finalCompleted ? "" : runtime.feedback || "误差存在。你画的线不直。"
+        : `误差存在。你画的线<span class="movable-word" id="movable-not" draggable="true" tabindex="0" aria-label="移动汉字不">不</span>直。`
+      : runtime.feedback,
   });
   const canvas = $("#canvas"), pad = $("#pad"), context = canvas.getContext("2d");
   const rect = pad.getBoundingClientRect(); canvas.width = rect.width * devicePixelRatio; canvas.height = rect.height * devicePixelRatio; context.scale(devicePixelRatio, devicePixelRatio);
@@ -716,22 +820,71 @@ function finale() {
   function draw(event) { const p=pos(event); points.push(p); context.strokeStyle="#146ef5"; context.lineWidth=4; context.lineCap="round"; if(points.length > 1){ const prev=points.at(-2); context.beginPath(); context.moveTo(prev.x,prev.y); context.lineTo(p.x,p.y); context.stroke(); } }
   pad.onpointerdown=(event)=>{drawing=true; points=[]; pad.setPointerCapture?.(event.pointerId); draw(event);};
   pad.onpointermove=(event)=>{if(drawing) draw(event);}; pad.onpointerup=()=>{drawing=false; runtime.points=points;};
-  $("#submit")?.addEventListener("click", () => { runtime.finalAttempts = attempts + 1; fail(`误差存在。系统将精度阈值提高至 ${(0.03 / (attempts + 2)).toFixed(3)} px。`); });
+  $("#submit")?.addEventListener("click", () => {
+    if (!wordPlaced) {
+      context.clearRect(0, 0, rect.width, rect.height);
+      delete runtime.points;
+    }
+    if (puzzleActive && wordPlaced) {
+      if (!runtime.points || runtime.points.length < 2) {
+        return fail("请先完成划线。");
+      }
+      runtime.finalCompleted = true;
+      runtime.feedback = "";
+      $(".feedback").textContent = "";
+      complete("拒绝无效目标", "你发现了题目中的语义错位：不必画出完全笔直的线。");
+      return;
+    }
+    if (puzzleActive) return;
+    runtime.finalAttempts = attempts + 1;
+    runtime.finalPuzzle = true;
+    runtime.feedback = "";
+    render();
+  });
+  if (puzzleActive && !wordPlaced) {
+    const movable = $("#movable-not");
+    const slot = $("#word-slot");
+    const placeWord = () => {
+      if (runtime.finalWordPlaced || !slot) return;
+      sfx.connect();
+      runtime.finalWordPlaced = true;
+      delete runtime.points;
+      render();
+    };
+    movable.addEventListener("dragstart", (event) => {
+      event.dataTransfer?.setData("text/plain", "不");
+      movable.classList.add("dragging");
+    });
+    movable.addEventListener("dragend", () => movable.classList.remove("dragging"));
+    movable.addEventListener("click", () => movable.classList.toggle("armed"));
+    slot.addEventListener("dragover", (event) => event.preventDefault());
+    slot.addEventListener("drop", (event) => {
+      event.preventDefault();
+      placeWord();
+    });
+    slot.addEventListener("click", () => {
+      if (movable.classList.contains("armed")) placeWord();
+    });
+    movable.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") movable.classList.toggle("armed");
+    });
+  }
   $("#stop")?.addEventListener("click", () => {
     app.insertAdjacentHTML("beforeend", `<div class="modal" id="modal"><section class="card"><div class="eyebrow">SYSTEM PROMPT</div><h2 class="title">确认放弃证明吗？</h2><p class="prompt">你可以继续无限接近一个触控设备无法达到的目标。</p><div class="controls"><button class="button secondary" id="back">继续尝试</button><button class="button danger" id="confirm">确认结束</button></div></section></div>`);
-    $("#back").onclick=()=>$("#modal").remove(); $("#confirm").onclick=()=>{ $("#modal").remove(); finish(); };
+    $("#back").onclick=()=>{ sfx.tap(); $("#modal").remove(); }; $("#confirm").onclick=()=>{ sfx.tap(); $("#modal").remove(); finish(); };
   });
 }
 
 function finish() {
   if (!state.done.includes(7)) state.done.push(7);
   state.level = 8; save(); vibrate([40,40,40,100]);
+  sfx.complete();
   render();
 }
 
 function certificate() {
-  app.innerHTML = `<div class="app"><section class="certificate"><div class="eyebrow">A.D.C.H. FINAL RECORD</div><h1>我是人类</h1><p class="prompt">验证完成。你并不完美。这正是证据。</p><div class="stamp">HUMAN<br>VERIFIED</div><p class="caption mono">关联测试记录：D.N.A.L. / 身份方向相反</p><div class="record-list">${traits.map((trait) => `<span>${trait}</span>`).join("")}</div><p><button class="button" id="replay">重新测试</button></p></section></div>`;
-  $("#replay").onclick = () => { state = { level: 0, done: [], settings: state.settings }; runtime = {}; save(); render(); };
+  app.innerHTML = `<div class="app"><div class="device-statusbar" aria-hidden="true"></div><section class="certificate"><div class="eyebrow">A.D.C.H. FINAL RECORD</div><h1>我是人类</h1><p class="prompt">验证完成。你并不完美。这正是证据。</p><div class="stamp">HUMAN<br>VERIFIED</div><p class="caption mono">关联测试记录：D.N.A.L. / 身份方向相反</p><div class="record-list">${traits.map((trait) => `<span>${trait}</span>`).join("")}</div><p><button class="button" id="replay">重新测试</button></p></section></div>`;
+  $("#replay").onclick = () => { sfx.tap(); state = { level: 0, done: [], settings: state.settings }; runtime = {}; save(); render(); };
 }
 
 const oldRender = render;
@@ -739,4 +892,15 @@ render = function() {
   if (state.level >= 8) return certificate();
   oldRender();
 };
+window.addEventListener("resize", () => requestAnimationFrame(fitBoardToViewport), { passive: true });
+
+document.addEventListener("pointerdown", (e) => {
+  const el = e.target.closest("button");
+  if (!el) return;
+  if (el.closest(".modal") && el.id === "next") return;
+  if (el.id === "submit" || el.id === "submit-letter") return;
+  if (el.dataset.tool || el.dataset.traffic || el.dataset.lightCell || el.dataset.hashiNode || el.dataset.bridge || el.dataset.letterEdge) return;
+  sfx.tap();
+}, { passive: true });
+
 render();
