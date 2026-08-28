@@ -419,7 +419,7 @@ function masyu() {
   const signal = (color) => `<span class="traffic-signal ${color}"><i></i><i></i><i></i></span>`;
   app.innerHTML = shell({
     title: "找到所有红绿灯",
-    prompt: "找到所有包含红绿灯的图像。",
+    prompt: "并让它们正确的照亮并连接。",
     body: `<div class="link-grid traffic-grid" id="traffic">${selected.map((color, index) => `<button class="link-cell" data-traffic="${index}" data-color="${initial[index] || connected[index]}" aria-label="验证码图像 ${index + 1}">${color ? signal(color) : ""}</button>`).join("")}</div>`,
     controls: `<div class="controls"><button id="restore-traffic" class="button secondary traffic-reset">还原初始状态</button></div>`,
     feedback: runtime.feedback,
@@ -446,7 +446,6 @@ function masyu() {
 
 const sudokuLinkInitial = ["4","","","","v","4","","","v","corner","","","corner","h","h",""];
 const sudokuNumberSlots = new Set([0, 1, 2, 3, 5, 6, 7, 10, 11, 15]);
-const sudokuAnchors = { 0: "4" };
 const sudokuPathPairs = [[0, 15], [5, 10]];
 function sudoku() {
   const palette = ["1", "2", "3", "4"];
@@ -466,9 +465,6 @@ function sudoku() {
       });
     };
 
-    Object.entries(sudokuAnchors).forEach(([index, value]) => {
-      if (cells[Number(index)] !== value) invalid.add(Number(index));
-    });
     sudokuPathPairs.forEach(([start, end]) => {
       if (["1", "2", "3", "4"].includes(cells[start])
         && ["1", "2", "3", "4"].includes(cells[end])
@@ -490,7 +486,6 @@ function sudoku() {
   const invalid = invalidNumbers(links);
   const isSolved = (cells) => {
     if (![...sudokuNumberSlots].every((index) => ["1", "2", "3", "4"].includes(cells[index]))) return false;
-    if (!Object.entries(sudokuAnchors).every(([index, value]) => cells[Number(index)] === value)) return false;
     return sudokuPathPairs.every(([start, end]) => cells[start] === cells[end])
       && invalidNumbers(cells).size === 0;
   };
@@ -564,8 +559,8 @@ const letterFenceBoards = [
   {
     clue: [2, 1, 3, 2, 1, 2, 3, 1, 3],
     clueItems: [
-      [2, 50, 60], [1, 150, 30], [1, 120, 65], [2, 180, 65], [3, 250, 60],
-      [2, 50, 160], [1, 150, 130], [2, 120, 165], [1, 180, 165], [2, 250, 160],
+      [2, 50, 60], [1, 150, 30], [1, 120, 65], [2, 180, 65], [1, 150, 90], [3, 250, 60],
+      [2, 50, 160], [1, 150, 130], [2, 120, 165], [1, 180, 165], [1, 150, 190], [1, 250, 160],
       [3, 50, 260], [1, 120, 265], [1, 180, 265], [3, 250, 260],
     ],
     extra: splitFenceSegments,
@@ -600,27 +595,15 @@ function fenceClues(board) {
     bottom: [`h-1-${row + 1}`, `d-${row}-bl`, `d-${row}-br`],
   });
   const entries = [];
-  board.clueItems.forEach(([value, x, y], index) => {
-    const row = index < 5 ? 0 : index < 10 ? 1 : 2;
-    const position = index % 5;
+  board.clueItems.forEach(([value, x, y]) => {
+    const row = Math.floor(y / 100);
     const triangle = triangles(row);
     let edges;
-    if (index >= 10) {
-      edges = [
-        [`h-0-2`, `h-0-3`, `v-0-2`, `v-1-2`],
-        triangle.left,
-        triangle.right,
-        [`h-2-2`, `h-2-3`, `v-2-2`, `v-3-2`],
-      ][index - 10];
-    } else {
-      edges = [
-        [`h-0-${row}`, `h-0-${row + 1}`, `v-0-${row}`, `v-1-${row}`],
-        triangle.top,
-        triangle.left,
-        triangle.right,
-        [`h-2-${row}`, `h-2-${row + 1}`, `v-2-${row}`, `v-3-${row}`],
-      ][position];
-    }
+    if (x === 50) edges = [`h-0-${row}`, `h-0-${row + 1}`, `v-0-${row}`, `v-1-${row}`];
+    else if (x === 250) edges = [`h-2-${row}`, `h-2-${row + 1}`, `v-2-${row}`, `v-3-${row}`];
+    else if (x === 120) edges = triangle.left;
+    else if (x === 180) edges = triangle.right;
+    else edges = y % 100 < 50 ? triangle.top : triangle.bottom;
     entries.push({ value, x, y, edges });
   });
   return entries;
