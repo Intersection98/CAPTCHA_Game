@@ -221,6 +221,10 @@ input[type="range"] { width: 100%; accent-color: #146ef5; touch-action: pan-y; }
 .certificate { border: 3px solid #121212; background: #fff; padding: 28px 20px 20px; text-align: center; box-shadow: 8px 8px 0 #20c56b; }
 .certificate h1 { font-size: 34px; margin: 6px 0 12px; }
 .stamp { width: 98px; height: 98px; border: 5px solid #20c56b; color: #16864b; border-radius: 50%; display: grid; place-items: center; margin: 22px auto; font-weight: 900; transform: rotate(-10deg); }
+.integrity-page .integrity-card { margin: auto 0; box-shadow: 8px 8px 0 #ff3b30; }
+.integrity-mark { width: 76px; height: 76px; display: grid; place-items: center; margin: 18px auto; border: 5px solid #ff3b30; color: #ff3b30; font: 900 52px/1 ui-monospace, monospace; }
+.integrity-card .caption { margin: 0 auto 22px; }
+.integrity-card .button { width: 100%; }
 .game-promo { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 18px; margin: 22px -20px 18px; padding: 18px 20px; background: #121212; color: #fff; text-align: left; }
 .game-promo-kicker { color: #ffd43b; font: 800 11px/1 ui-monospace, SFMono-Regular, Consolas, monospace; }
 .game-promo h2 { margin: 5px 0 4px; font-size: 25px; line-height: 1.1; }

@@ -1,6 +1,10 @@
 const $ = (selector, root = document) => root.querySelector(selector);
 const app = $("#app");
-const STORAGE_KEY = "adch-progress-v1";
+const LEGACY_STORAGE_KEY = "adch-progress-v1";
+const VAULT_DATABASE = "adch-progress-v2";
+const VAULT_STORE = "records";
+const VAULT_KEY = "device-key";
+const VAULT_PROGRESS = "progress";
 const traits = [
   "持续注意",
   "另辟蹊径",
@@ -12,8 +16,125 @@ const traits = [
   "拒绝无效目标",
 ];
 
-let state = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{"level":0,"done":[],"settings":{}}');
+const defaultState = (settings = {}) => ({ level: 0, done: [], settings });
+let state = defaultState();
 let runtime = {};
+let storageReady = false;
+let storageQueue = Promise.resolve();
+let vaultDatabasePromise;
+
+class IntegrityError extends Error {}
+
+function normalizeState(candidate) {
+  if (!candidate || typeof candidate !== "object") throw new IntegrityError();
+  const level = Number(candidate.level);
+  const done = Array.isArray(candidate.done) ? candidate.done : [];
+  const expected = Array.from({ length: Math.min(level, 8) }, (_, index) => index);
+  if (!Number.isInteger(level) || level < 0 || level > 8 || done.length !== expected.length || done.some((value, index) => value !== expected[index])) throw new IntegrityError();
+  return { level, done: expected, settings: candidate.settings && typeof candidate.settings === "object" ? candidate.settings : {} };
+}
+
+function openVault() {
+  if (vaultDatabasePromise) return vaultDatabasePromise;
+  vaultDatabasePromise = new Promise((resolve, reject) => {
+    const request = indexedDB.open(VAULT_DATABASE, 1);
+    request.onupgradeneeded = () => request.result.createObjectStore(VAULT_STORE);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  return vaultDatabasePromise;
+}
+
+async function readVaultRecord(key) {
+  const database = await openVault();
+  return new Promise((resolve, reject) => {
+    const request = database.transaction(VAULT_STORE, "readonly").objectStore(VAULT_STORE).get(key);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function writeVaultRecord(key, value) {
+  const database = await openVault();
+  return new Promise((resolve, reject) => {
+    const request = database.transaction(VAULT_STORE, "readwrite").objectStore(VAULT_STORE).put(value, key);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function encodeBytes(bytes) {
+  return btoa(String.fromCharCode(...bytes));
+}
+
+function decodeBytes(value) {
+  return Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
+}
+
+async function digest(value) {
+  return encodeBytes(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value))));
+}
+
+async function deviceKey() {
+  let key = await readVaultRecord(VAULT_KEY);
+  if (key instanceof CryptoKey) return key;
+  key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+  await writeVaultRecord(VAULT_KEY, key);
+  return key;
+}
+
+async function persistState(nextState) {
+  const prior = await readVaultRecord(VAULT_PROGRESS);
+  const key = await deviceKey();
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const sequence = Number(prior?.sequence || 0) + 1;
+  const payload = JSON.stringify({ version: 2, sequence, previous: prior?.digest || null, state: normalizeState(nextState) });
+  const cipher = encodeBytes(new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(payload))));
+  await writeVaultRecord(VAULT_PROGRESS, { sequence, iv: encodeBytes(iv), cipher, digest: await digest(`${sequence}:${encodeBytes(iv)}:${cipher}`) });
+}
+
+async function restoreState() {
+  const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
+  const record = await readVaultRecord(VAULT_PROGRESS);
+  if (!record) {
+    let settings = {};
+    if (legacy) {
+      try {
+        const oldState = normalizeState(JSON.parse(legacy));
+        if (oldState.level !== 0) throw new IntegrityError();
+        settings = oldState.settings;
+      } finally {
+        localStorage.removeItem(LEGACY_STORAGE_KEY);
+      }
+    }
+    const cleanState = defaultState(settings);
+    await persistState(cleanState);
+    return cleanState;
+  }
+  if (!record.iv || !record.cipher || !record.digest || record.digest !== await digest(`${record.sequence}:${record.iv}:${record.cipher}`)) throw new IntegrityError();
+  try {
+    const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: decodeBytes(record.iv) }, await deviceKey(), decodeBytes(record.cipher));
+    const payload = JSON.parse(new TextDecoder().decode(plain));
+    if (payload.version !== 2 || payload.sequence !== record.sequence) throw new IntegrityError();
+    localStorage.removeItem(LEGACY_STORAGE_KEY);
+    return normalizeState(payload.state);
+  } catch {
+    throw new IntegrityError();
+  }
+}
+
+async function clearVault() {
+  localStorage.removeItem(LEGACY_STORAGE_KEY);
+  const database = await openVault();
+  database.close();
+  vaultDatabasePromise = undefined;
+  await new Promise((resolve, reject) => {
+    const request = indexedDB.deleteDatabase(VAULT_DATABASE);
+    request.onsuccess = resolve;
+    request.onerror = () => reject(request.error);
+    request.onblocked = () => reject(new IntegrityError());
+  });
+}
 const activePointers = new Map();
 const behaviorProfiles = [
   { elapsed: 700, actions: 1, press: 650 },
@@ -64,7 +185,9 @@ function hasHumanBehavior() {
 }
 
 function save() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  if (!storageReady) return;
+  const snapshot = normalizeState(state);
+  storageQueue = storageQueue.then(() => persistState(snapshot)).catch(() => showIntegrityFailure());
 }
 
 function vibrate(pattern = 20) {
@@ -184,6 +307,34 @@ function fail(text) {
   vibrate([35, 45, 35]);
   sfx.fail();
   render();
+}
+
+function showIntegrityFailure() {
+  storageReady = false;
+  app.innerHTML = `<div class="app integrity-page">
+    <div class="device-statusbar" aria-hidden="true"></div>
+    <section class="certificate integrity-card">
+      <div class="eyebrow">VERIFICATION PATH</div>
+      <div class="integrity-mark" aria-hidden="true">!</div>
+      <h1>异常验证路径</h1>
+      <p class="prompt">检测到不完整的验证记录。</p>
+      <p class="caption">你没有通过人类测试</p>
+      <button class="button danger" id="restart-verification">重新开始测试</button>
+    </section>
+  </div>`;
+  $("#restart-verification").onclick = async () => {
+    try {
+      await clearVault();
+      state = defaultState();
+      runtime = {};
+      resetHumanBehavior();
+      storageReady = true;
+      await persistState(state);
+      render();
+    } catch {
+      showIntegrityFailure();
+    }
+  };
 }
 
 function fitBoardToViewport() {
@@ -1046,4 +1197,15 @@ document.addEventListener("input", (event) => {
   currentHumanBehavior().inputs += 1;
 }, { capture: true });
 
-render();
+async function boot() {
+  try {
+    state = await restoreState();
+    storageReady = true;
+    resetHumanBehavior();
+    render();
+  } catch {
+    showIntegrityFailure();
+  }
+}
+
+boot();
