@@ -22,15 +22,16 @@ let runtime = {};
 let storageReady = false;
 let storageQueue = Promise.resolve();
 let vaultDatabasePromise;
+const mouseRisk = { score: 0, suspiciousStreak: 0, signatures: [] };
 
-class IntegrityError extends Error {}
+class RecordError extends Error {}
 
 function normalizeState(candidate) {
-  if (!candidate || typeof candidate !== "object") throw new IntegrityError();
+  if (!candidate || typeof candidate !== "object") throw new RecordError();
   const level = Number(candidate.level);
   const done = Array.isArray(candidate.done) ? candidate.done : [];
   const expected = Array.from({ length: Math.min(level, 8) }, (_, index) => index);
-  if (!Number.isInteger(level) || level < 0 || level > 8 || done.length !== expected.length || done.some((value, index) => value !== expected[index])) throw new IntegrityError();
+  if (!Number.isInteger(level) || level < 0 || level > 8 || done.length !== expected.length || done.some((value, index) => value !== expected[index])) throw new RecordError();
   return { level, done: expected, settings: candidate.settings && typeof candidate.settings === "object" ? candidate.settings : {} };
 }
 
@@ -101,7 +102,7 @@ async function restoreState() {
     if (legacy) {
       try {
         const oldState = normalizeState(JSON.parse(legacy));
-        if (oldState.level !== 0) throw new IntegrityError();
+        if (oldState.level !== 0) throw new RecordError();
         settings = oldState.settings;
       } finally {
         localStorage.removeItem(LEGACY_STORAGE_KEY);
@@ -111,15 +112,15 @@ async function restoreState() {
     await persistState(cleanState);
     return cleanState;
   }
-  if (!record.iv || !record.cipher || !record.digest || record.digest !== await digest(`${record.sequence}:${record.iv}:${record.cipher}`)) throw new IntegrityError();
+  if (!record.iv || !record.cipher || !record.digest || record.digest !== await digest(`${record.sequence}:${record.iv}:${record.cipher}`)) throw new RecordError();
   try {
     const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: decodeBytes(record.iv) }, await deviceKey(), decodeBytes(record.cipher));
     const payload = JSON.parse(new TextDecoder().decode(plain));
-    if (payload.version !== 2 || payload.sequence !== record.sequence) throw new IntegrityError();
+    if (payload.version !== 2 || payload.sequence !== record.sequence) throw new RecordError();
     localStorage.removeItem(LEGACY_STORAGE_KEY);
     return normalizeState(payload.state);
   } catch {
-    throw new IntegrityError();
+    throw new RecordError();
   }
 }
 
@@ -132,7 +133,7 @@ async function clearVault() {
     const request = indexedDB.deleteDatabase(VAULT_DATABASE);
     request.onsuccess = resolve;
     request.onerror = () => reject(request.error);
-    request.onblocked = () => reject(new IntegrityError());
+    request.onblocked = () => reject(new RecordError());
   });
 }
 const activePointers = new Map();
@@ -184,10 +185,31 @@ function hasHumanBehavior() {
     && evidence.longestPress >= (profile.press || 0);
 }
 
+function mousePathRisk(pointer) {
+  if (pointer.type !== "mouse" || pointer.points.length < 4 || pointer.distance < 24) return 0;
+  const start = pointer.points[0];
+  const end = pointer.points.at(-1);
+  const directDistance = Math.hypot(end.x - start.x, end.y - start.y);
+  const straightness = directDistance / pointer.distance;
+  const intervals = pointer.points.slice(1).map((point, index) => point.time - pointer.points[index].time);
+  const average = intervals.reduce((sum, value) => sum + value, 0) / intervals.length;
+  const jitter = Math.sqrt(intervals.reduce((sum, value) => sum + (value - average) ** 2, 0) / intervals.length);
+  const signature = `${Math.round(directDistance / 12)}:${Math.round(straightness * 20)}:${Math.round(average / 8)}`;
+  const repeated = mouseRisk.signatures.includes(signature);
+  mouseRisk.signatures = [...mouseRisk.signatures.slice(-5), signature];
+  return (straightness > 0.995 ? 1 : 0)
+    + (jitter < 1.5 && intervals.length >= 5 ? 1 : 0)
+    + (repeated ? 1 : 0);
+}
+
+function hasHighMouseRisk() {
+  return mouseRisk.score >= 5 && mouseRisk.suspiciousStreak >= 3;
+}
+
 function save() {
   if (!storageReady) return;
   const snapshot = normalizeState(state);
-  storageQueue = storageQueue.then(() => persistState(snapshot)).catch(() => showIntegrityFailure());
+  storageQueue = storageQueue.then(() => persistState(snapshot)).catch(() => showRobotCertificate());
 }
 
 function vibrate(pattern = 20) {
@@ -286,6 +308,7 @@ function common() {
 }
 
 function complete() {
+  if (hasHighMouseRisk()) return showRobotCertificate();
   if (!hasHumanBehavior()) return fail("验证未通过。");
   if (!state.done.includes(state.level)) state.done.push(state.level);
   state.level += 1;
@@ -309,19 +332,25 @@ function fail(text) {
   render();
 }
 
-function showIntegrityFailure() {
+function showRobotCertificate() {
   storageReady = false;
-  app.innerHTML = `<div class="app integrity-page">
-    <div class="device-statusbar" aria-hidden="true"></div>
-    <section class="certificate integrity-card">
-      <div class="eyebrow">VERIFICATION PATH</div>
-      <div class="integrity-mark" aria-hidden="true">!</div>
-      <h1>异常验证路径</h1>
-      <p class="prompt">检测到不完整的验证记录。</p>
-      <p class="caption">你没有通过人类测试</p>
-      <button class="button danger" id="restart-verification">重新开始测试</button>
-    </section>
-  </div>`;
+  app.innerHTML = `<div class="app certificate-page robot-page"><div class="device-statusbar" aria-hidden="true"></div><section class="certificate robot-certificate">
+    <div class="eyebrow">CAPTCHA FINAL RECORD</div>
+    <h1>恭喜通过测试，你是机器人</h1>
+    <p class="prompt">验证过程已被系统完整记录。</p>
+    <div class="stamp robot-stamp">ROBOT<br>VERIFIED</div>
+    <div class="record-list">${traits.map((trait) => `<span>${trait}</span>`).join("")}</div>
+    <aside class="game-promo" aria-labelledby="robot-promo-title">
+      <div class="game-promo-copy">
+        <span class="game-promo-kicker">NEXT PUZZLE</span>
+        <h2 id="robot-promo-title">别问模型</h2>
+        <p>扮演无所不知的大模型，进入一场规则不断累积的对话式解谜。</p>
+      </div>
+      <a class="button game-promo-link" id="robot-promo-link" href="https://intersection98.github.io/Do-not-ask-LLM/" target="_blank" rel="noopener noreferrer">开始下一场解谜 <span aria-hidden="true">↗</span></a>
+    </aside>
+    <button class="button danger replay-button" id="restart-verification">重新开始测试</button>
+  </section></div>`;
+  $("#robot-promo-link").onclick = () => { sfx.tap(); };
   $("#restart-verification").onclick = async () => {
     try {
       await clearVault();
@@ -332,7 +361,7 @@ function showIntegrityFailure() {
       await persistState(state);
       render();
     } catch {
-      showIntegrityFailure();
+      showRobotCertificate();
     }
   };
 }
@@ -367,6 +396,11 @@ function render() {
 
 function intro() {
   let holding = false, started = 0, frame;
+  const randomTarget = (minimum = 52) => Math.round(minimum + Math.random() * (78 - minimum));
+  if (!Number.isFinite(runtime.holdTarget)) {
+    runtime.holdTarget = randomTarget();
+    runtime.holdShifted = false;
+  }
   app.innerHTML = shell({
     title: "我不是机器人",
     prompt: "请勾选下方方框开始游戏。",
@@ -386,10 +420,16 @@ function intro() {
     </div>`,
     feedback: runtime.feedback,
   });
-  const check = $("#check"), meter = $("#meter"), box = $("#box");
+  const check = $("#check"), meter = $("#meter"), box = $("#box"), target = $(".hold-target");
+  target.style.left = `${runtime.holdTarget}%`;
   function tick(now) {
     if (!holding) return;
     const pct = Math.min(100, ((now - started) / 1500) * 100);
+    if (pct >= 32 && !runtime.holdShifted) {
+      runtime.holdTarget = randomTarget(52);
+      runtime.holdShifted = true;
+      target.style.left = `${runtime.holdTarget}%`;
+    }
     runtime.holdProgress = pct;
     meter.style.width = `${pct}%`;
     if (pct >= 100) {
@@ -408,11 +448,16 @@ function intro() {
   ["pointerup", "pointercancel", "pointerleave"].forEach((name) => check.addEventListener(name, () => {
     if (!holding) return;
     holding = false; cancelAnimationFrame(frame); box.classList.remove("holding");
-    if (name === "pointerup" && runtime.holdProgress >= 59 && runtime.holdProgress <= 69) {
+    if (name === "pointerup"
+      && runtime.holdProgress >= runtime.holdTarget - 7
+      && runtime.holdProgress <= runtime.holdTarget + 7) {
       box.textContent = "✓";
       complete();
       return;
     }
+    delete runtime.holdTarget;
+    delete runtime.holdShifted;
+    delete runtime.holdProgress;
     fail("验证未通过。");
   }));
 }
@@ -1153,11 +1198,13 @@ document.addEventListener("pointerdown", (event) => {
   if (evidence.lastPoint) evidence.travel += Math.hypot(point.x - evidence.lastPoint.x, point.y - evidence.lastPoint.y);
   evidence.lastPoint = point;
   activePointers.set(event.pointerId, {
+    type: event.pointerType,
     startedAt: performance.now(),
     lastX: event.clientX,
     lastY: event.clientY,
     distance: 0,
     samples: 0,
+    points: [{ x: event.clientX, y: event.clientY, time: performance.now() }],
   });
 }, { capture: true, passive: true });
 
@@ -1169,6 +1216,9 @@ document.addEventListener("pointermove", (event) => {
   pointer.lastX = event.clientX;
   pointer.lastY = event.clientY;
   pointer.samples += 1;
+  if (pointer.type === "mouse" && pointer.points.length < 32) {
+    pointer.points.push({ x: event.clientX, y: event.clientY, time: performance.now() });
+  }
 }, { capture: true, passive: true });
 
 document.addEventListener("pointerup", (event) => {
@@ -1179,6 +1229,11 @@ document.addEventListener("pointerup", (event) => {
   const duration = performance.now() - pointer.startedAt;
   evidence.longestPress = Math.max(evidence.longestPress, duration);
   if (pointer.samples >= 2 && pointer.distance >= 8) evidence.drags += 1;
+  if (pointer.type === "mouse") {
+    const risk = mousePathRisk(pointer);
+    mouseRisk.score = Math.max(0, mouseRisk.score + risk - (risk ? 0 : 1));
+    mouseRisk.suspiciousStreak = risk ? mouseRisk.suspiciousStreak + 1 : 0;
+  }
   activePointers.delete(event.pointerId);
 }, { capture: true, passive: true });
 
@@ -1204,7 +1259,7 @@ async function boot() {
     resetHumanBehavior();
     render();
   } catch {
-    showIntegrityFailure();
+    showRobotCertificate();
   }
 }
 
